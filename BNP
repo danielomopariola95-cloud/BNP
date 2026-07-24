@@ -1,0 +1,195 @@
+# ============================================================================
+
+
+# STEP 1: Install packages - this gets all the tools we need
+!pip install pandas numpy scikit-learn plotly -q  # the -q makes it quiet so we don't see all the installation messages
+
+# STEP 2: Import tools - bring in all the libraries we'll use
+import pandas as pd  # this handles our data like Excel would
+import numpy as np  # this does all the math calculations for us
+import plotly.graph_objects as go  # this makes those professional looking charts
+from sklearn.ensemble import RandomForestRegressor  # our prediction model - like having 150 experts vote
+from sklearn.metrics import mean_absolute_error, r2_score  # these tell us how good our model is
+from sklearn.preprocessing import StandardScaler  # makes sure big numbers don't bully smaller ones
+import warnings
+warnings.filterwarnings("ignore")  # hides annoying messages that don't affect the results
+
+# Print a nice header so we know the program started
+print("="*60)  # draws a line of 60 equal signs
+print("REVENUE FORECASTING SYSTEM")  # tells us what we're running
+print("="*60)  # another line to close the header
+
+# STEP 3: Generate synthetic data - since we don't have real data, we'll make some
+dates = pd.date_range('2018-01-01', '2026-12-31', freq='D')  # creates every single day from 2018 to 2026
+np.random.seed(42)  # this makes sure the random numbers are the same every time we run it
+
+# Create empty list to hold all our data
+data = []
+
+# Loop through each day
+for d in dates:
+    # Loop through 3 stores
+    for s in [1,2,3]:
+        # Loop through 3 items per store
+        for i in [1,2,3]:
+            # Calculate revenue with: base amount + growth + seasonality + random noise
+            revenue = 100 + (d-dates[0]).days*0.01 + 20*np.sin(2*np.pi*d.day_of_year/365) + np.random.normal(0,5)
+            # Add this record to our data list
+            data.append({'date': d, 'store_id': s, 'item_id': i, 'sales_volume': revenue})
+
+# Convert our list to a proper table (DataFrame)
+df = pd.DataFrame(data)
+
+# Convert the date column to actual date format
+df['date'] = pd.to_datetime(df['date'])
+
+# Sort by date from oldest to newest and reset the index numbers
+df = df.sort_values('date').reset_index(drop=True)
+
+# Tell the user how much data we loaded
+print(f"Data loaded: {len(df)} records")
+
+# STEP 4: Feature engineering - break dates into numbers the computer can understand
+# Loop through each date component we want to extract
+for col in ['year','month','day','dayofweek','quarter']:
+    # Extract each part from the date (like getting the month from a date)
+    df[col] = getattr(df['date'].dt, col)
+
+# Create sine wave for month - this tells the computer that December and January are connected (it's a cycle)
+df['month_sin'] = np.sin(2*np.pi*df['month']/12)
+
+# Create sine wave for day of week - shows that Sunday and Monday are connected
+df['day_sin'] = np.sin(2*np.pi*df['dayofweek']/7)
+
+# Create a flag for weekends - 1 if Saturday/Sunday, 0 if weekday
+df['is_weekend'] = (df['dayofweek'] >= 5).astype(int)
+
+# STEP 5: Chronological split - CRITICAL for banking! No look-ahead bias!
+# These are all the features (ingredients) we'll use to predict revenue
+features = ['year','month','day','dayofweek','quarter','month_sin','day_sin','is_weekend','store_id','item_id']
+
+# X = the features (ingredients), y = what we're trying to predict
+X, y = df[features], df['sales_volume']
+
+# Calculate where to split - 80% for training, 20% for testing
+split = int(len(df)*0.8)
+
+# Use the OLDEST 80% of data to train the model
+X_train, X_test = X.iloc[:split], X.iloc[split:]
+
+# Use the NEWEST 20% of data to test the model
+y_train, y_test = y.iloc[:split], y.iloc[split:]
+
+# Tell the user how much data is in each set
+print(f"Training data: {len(X_train)} records")
+print(f"Test data: {len(X_test)} records")
+
+# STEP 6: Train the model - this is where the magic happens
+# Create a scaler that will make all numbers comparable
+scaler = StandardScaler()
+
+# Create our Random Forest model - 150 trees, max depth of 10
+model = RandomForestRegressor(n_estimators=150, max_depth=10, random_state=42, n_jobs=-1)
+
+# Scale the training data and train the model
+model.fit(scaler.fit_transform(X_train), y_train)
+
+# Predict on the test data (data the model hasn't seen before)
+y_pred = model.predict(scaler.transform(X_test))
+
+# STEP 7: Calculate metrics - how good is our model?
+# MAE = on average, how many pounds was I wrong by?
+mae = mean_absolute_error(y_test, y_pred)
+
+# R² = what percentage of patterns did my model figure out?
+r2 = r2_score(y_test, y_pred)
+
+# Print the results nicely
+print("\n" + "="*60)
+print("MODEL PERFORMANCE")
+print("="*60)
+print(f"Mean Absolute Error: £{mae:.2f}")  # lower is better
+print(f"R-squared Score: {r2:.2%}")  # closer to 100% is better
+print(f"Model Accuracy: {(1 - mae/y_test.mean()):.1%}")  # overall accuracy
+print("="*60)
+
+# STEP 8: Figure out what factors matter most
+# Create a table showing which features were most important
+importance = pd.DataFrame({
+    'Feature': features,  # list of feature names
+    'Importance': model.feature_importances_  # their importance scores
+}).sort_values('Importance', ascending=False)  # put the most important at the top
+
+# Print the top 10 most important factors
+print("\nTOP 10 FACTORS DRIVING REVENUE:")
+print("-"*40)
+# Loop through each row and print it
+for i, row in importance.head(10).iterrows():
+    print(f"  {row['Feature']}: {row['Importance']:.2%}")
+
+# STEP 9: Create a forecast chart - this shows our predictions visually
+# Create a blank chart
+fig = go.Figure()
+
+# Get the dates for the test period
+dates_test = df['date'].iloc[split:]
+
+# Add the ACTUAL revenue line (what really happened)
+fig.add_trace(go.Scatter(
+    x=dates_test,  # dates on the x-axis
+    y=y_test,  # actual revenue on the y-axis
+    mode='lines',  # draw it as a line
+    name='Actual',  # label it "Actual"
+    line=dict(color='#3498db', width=2)  # make it blue and thick
+))
+
+# Add the PREDICTED revenue line (what our model thought would happen)
+fig.add_trace(go.Scatter(
+    x=dates_test,  # dates on the x-axis
+    y=y_pred,  # predicted revenue on the y-axis
+    mode='lines',  # draw it as a line
+    name='Predicted',  # label it "Predicted"
+    line=dict(color='#e74c3c', width=2, dash='dash')  # make it red and dashed
+))
+
+# Make the chart look professional
+fig.update_layout(
+    template='plotly_dark',  # dark theme like a Bloomberg Terminal
+    height=500,  # how tall the chart should be
+    hovermode='x unified',  # shows information when you hover
+    title="Revenue Forecast: Actual vs Predictions",  # chart title
+    xaxis_title="Date",  # label for the bottom
+    yaxis_title="Revenue"  # label for the left side
+)
+
+# Actually show the chart on screen
+fig.show()
+
+# STEP 10: Create a feature importance chart
+# Create another blank chart
+fig2 = go.Figure()
+
+# Add bars showing importance scores
+fig2.add_trace(go.Bar(
+    x=importance['Importance'].head(10),  # importance scores on the bottom
+    y=importance['Feature'].head(10),  # feature names on the left
+    orientation='h',  # make bars horizontal (easier to read long names)
+    marker_color='#00bcd4'  # make them teal colored
+))
+
+# Make the chart look professional
+fig2.update_layout(
+    template='plotly_dark',  # dark theme
+    height=400,  # how tall the chart should be
+    title="Top 10 Factors Driving Revenue",  # chart title
+    xaxis_title="Importance Score",  # label for the bottom
+    yaxis_title="Feature"  # label for the left side
+)
+
+# Actually show the chart on screen
+fig2.show()
+
+# Print a final message
+print("\n" + "="*60)
+print("Analysis Complete!")  # tells us we're done
+print("="*60)  # closing line
