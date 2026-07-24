@@ -86,7 +86,7 @@ Hi, I'm Daniel Omopariola. I built these projects to demonstrate my skills in ma
 
 ---
 
-## Contact
+## Contact:++447424560800
 
 
 -
